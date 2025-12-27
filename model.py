@@ -1,5 +1,6 @@
 #!/usr/bin/python2.7
 
+import json
 import sys
 import torch
 import torch.nn as nn
@@ -11,7 +12,7 @@ from loguru import logger
 
 
 class MS_TCN2(nn.Module):
-MS_TCB    def __init__(self, num_layers_PG, num_layers_R, num_R, num_f_maps, dim, num_classes):
+    def __init__(self, num_layers_PG, num_layers_R, num_R, num_f_maps, dim, num_classes):
         super(MS_TCN2, self).__init__()
         self.PG = Prediction_Generation(num_layers_PG, num_f_maps, dim, num_classes)
         self.Rs = nn.ModuleList([copy.deepcopy(Refinement(num_layers_R, num_f_maps, num_classes, num_classes)) for s in range(num_R)])
@@ -126,11 +127,12 @@ class DilatedResidualLayer(nn.Module):
 
 
 class Trainer:
-    def __init__(self, num_layers_PG, num_layers_R, num_R, num_f_maps, dim, num_classes, dataset, split):
+    def __init__(self, num_layers_PG, num_layers_R, num_R, num_f_maps, dim, num_classes, dataset, split, lambda_val):
         self.model = MS_TCN2(num_layers_PG, num_layers_R, num_R, num_f_maps, dim, num_classes)
         self.ce = nn.CrossEntropyLoss(ignore_index=-100)
         self.mse = nn.MSELoss(reduction='none')
         self.num_classes = num_classes
+        self.lambda_val = lambda_val
 
         logger.add('logs/' + dataset + "_" + split + "_{time}.log")
         logger.add(sys.stdout, colorize=True, format="{message}")
@@ -143,8 +145,9 @@ class Trainer:
             epoch_loss = 0
             correct = 0
             total = 0
+            video_probabilities = dict()
             while batch_gen.has_next():
-                batch_input, batch_target, mask = batch_gen.next_batch(batch_size)
+                batch_input, batch_target, mask, batch_id = batch_gen.next_batch(batch_size)
                 batch_input, batch_target, mask = batch_input.to(device), batch_target.to(device), mask.to(device)
                 optimizer.zero_grad()
                 predictions = self.model(batch_input)
@@ -152,7 +155,7 @@ class Trainer:
                 loss = 0
                 for p in predictions:
                     loss += self.ce(p.transpose(2, 1).contiguous().view(-1, self.num_classes), batch_target.view(-1))
-                    loss += 0.15*torch.mean(torch.clamp(self.mse(F.log_softmax(p[:, :, 1:], dim=1), F.log_softmax(p.detach()[:, :, :-1], dim=1)), min=0, max=16)*mask[:, :, 1:])
+                    loss += self.lambda_val * torch.mean(torch.clamp(self.mse(F.log_softmax(p[:, :, 1:], dim=1), F.log_softmax(p.detach()[:, :, :-1], dim=1)), min=0, max=16)*mask[:, :, 1:])
 
                 epoch_loss += loss.item()
                 loss.backward()
@@ -161,15 +164,20 @@ class Trainer:
                 _, predicted = torch.max(predictions[-1].data, 1)
                 correct += ((predicted == batch_target).float()*mask[:, 0, :].squeeze(1)).sum().item()
                 total += torch.sum(mask[:, 0, :]).item()
+                video_probabilities[batch_id] = {"logits": predictions[-1].squeeze().cpu().detach().tolist()}
 
             batch_gen.reset()
             torch.save(self.model.state_dict(), save_dir + "/epoch-" + str(epoch + 1) + ".model")
             torch.save(optimizer.state_dict(), save_dir + "/epoch-" + str(epoch + 1) + ".opt")
             logger.info("[epoch %d]: epoch loss = %f,   acc = %f" % (epoch + 1, epoch_loss / len(batch_gen.list_of_examples),
                                                                float(correct)/total))
+        # save probabilities for temperature scaling
+        prob_logs = {"video_probabilities": video_probabilities, "metadata": {"num_epochs": num_epochs, "batch_size": batch_size}}
+        return prob_logs
 
     def predict(self, model_dir, results_dir, features_path, vid_list_file, epoch, actions_dict, device, sample_rate):
         self.model.eval()
+        video_probabilities, video_predictions = dict(), dict()
         with torch.no_grad():
             self.model.to(device)
             self.model.load_state_dict(torch.load(model_dir + "/epoch-" + str(epoch) + ".model"))
@@ -189,9 +197,13 @@ class Trainer:
                 recognition = []
                 for i in range(len(predicted)):
                     recognition = np.concatenate((recognition, [list(actions_dict.keys())[list(actions_dict.values()).index(predicted[i].item())]]*sample_rate))
+                video_probabilities[vid.split('.')[0]] = {"logits": predictions[-1].squeeze().cpu().detach().tolist(), "predicted_classes": predicted.cpu().detach().tolist()}
                 f_name = vid.split('/')[-1].split('.')[0]
                 f_ptr = open(results_dir + "/" + f_name, "w")
                 f_ptr.write("### Frame level recognition: ###\n")
                 f_ptr.write(' '.join(recognition))
                 f_ptr.close()
+                
+        prob_logs = {"video_probabilities": video_probabilities, "metadata": {"num_epochs": epoch, "batch_size": 1}}
+        return prob_logs
 

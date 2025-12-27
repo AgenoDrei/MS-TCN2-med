@@ -39,12 +39,13 @@ class BatchGenerator(object):
         for vid in batch:
             features = np.load(self.features_path + vid.split('.')[0] + '.npy')
             file_ptr = open(self.gt_path + vid, 'r')
-            content = file_ptr.read().split('\n')[:-1]
+            content = file_ptr.read().split('\n')# [:-1]
             classes = np.zeros(min(np.shape(features)[1], len(content)))
             for i in range(len(classes)):
                 classes[i] = self.actions_dict[content[i]]
             batch_input .append(features[:, ::self.sample_rate])
             batch_target.append(classes[::self.sample_rate])
+            batch_id = vid.split('.')[0]
 
         length_of_sequences = list(map(len, batch_target))
         batch_input_tensor = torch.zeros(len(batch_input), np.shape(batch_input[0])[0], max(length_of_sequences), dtype=torch.float)
@@ -55,4 +56,4 @@ class BatchGenerator(object):
             batch_target_tensor[i, :np.shape(batch_target[i])[0]] = torch.from_numpy(batch_target[i])
             mask[i, :, :np.shape(batch_target[i])[0]] = torch.ones(self.num_classes, np.shape(batch_target[i])[0])
 
-        return batch_input_tensor, batch_target_tensor, mask
+        return batch_input_tensor, batch_target_tensor, mask, batch_id

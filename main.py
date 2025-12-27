@@ -1,5 +1,6 @@
 #!/usr/bin/python2.7
 
+import json
 import torch
 from model import Trainer
 from batch_gen import BatchGenerator
@@ -32,6 +33,8 @@ parser.add_argument('--num_epochs', type=int)
 parser.add_argument('--num_layers_PG', type=int)
 parser.add_argument('--num_layers_R', type=int)
 parser.add_argument('--num_R', type=int)
+parser.add_argument('--sample_rate', type=int)
+parser.add_argument('--lambda_val', type=float, default=0.35)
 
 args = parser.parse_args()
 
@@ -46,7 +49,7 @@ num_R = args.num_R
 num_f_maps = args.num_f_maps
 
 # use the full temporal resolution @ 15fps
-sample_rate = 1
+sample_rate = args.sample_rate
 # sample input features @ 15fps instead of 30 fps
 # for 50salads, and up-sample the output to 30 fps
 if args.dataset == "50salads":
@@ -61,11 +64,16 @@ mapping_file = "./data/"+args.dataset+"/mapping.txt"
 
 model_dir = "./models/"+args.dataset+"/split_"+args.split
 results_dir = "./results/"+args.dataset+"/split_"+args.split
+prob_logs_dir = "./prob_logs/"+args.dataset+"/split_"+args.split
 
 if not os.path.exists(model_dir):
     os.makedirs(model_dir)
 if not os.path.exists(results_dir):
     os.makedirs(results_dir)
+if not os.path.exists(prob_logs_dir):
+    os.makedirs(prob_logs_dir)
+    os.mkdir(os.path.join(prob_logs_dir, "train"))
+    os.mkdir(os.path.join(prob_logs_dir, "validation"))
 
 file_ptr = open(mapping_file, 'r')
 actions = file_ptr.read().split('\n')[:-1]
@@ -74,13 +82,19 @@ actions_dict = dict()
 for a in actions:
     actions_dict[a.split()[1]] = int(a.split()[0])
 
+prob_logs = None
 num_classes = len(actions_dict)
-trainer = Trainer(num_layers_PG, num_layers_R, num_R, num_f_maps, features_dim, num_classes, args.dataset, args.split)
+trainer = Trainer(num_layers_PG, num_layers_R, num_R, num_f_maps, features_dim, num_classes, args.dataset, args.split, args.lambda_val)
 if args.action == "train":
     batch_gen = BatchGenerator(num_classes, actions_dict, gt_path, features_path, sample_rate)
     batch_gen.read_data(vid_list_file)
-    trainer.train(model_dir, batch_gen, num_epochs=num_epochs, batch_size=bz, learning_rate=lr, device=device)
+    prob_logs = trainer.train(model_dir, batch_gen, num_epochs=num_epochs, batch_size=bz, learning_rate=lr, device=device)
 
 if args.action == "predict":
-    trainer.predict(model_dir, results_dir, features_path, vid_list_file_tst, num_epochs, actions_dict, device, sample_rate)
+    prob_logs = trainer.predict(model_dir, results_dir, features_path, vid_list_file_tst, num_epochs, actions_dict, device, sample_rate)
+
+subdir = "train" if args.action == "train" else "validation"
+prob_logs["metadata"]["action_mapping"] = actions_dict
+with open(os.path.join(prob_logs_dir, subdir, f'epoch_{args.num_epochs}_{subdir}_probabilities.json'), 'w') as f:
+        json.dump(prob_logs, f)
 
