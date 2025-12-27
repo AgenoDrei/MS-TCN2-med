@@ -26,6 +26,8 @@ def run(input_path, gt_path, check, transpose):
             print(f'GT file {ground_truth_path} does not exist, skipping...')
             continue
         ground_truth = open(ground_truth_path, 'r').readlines()
+        if ground_truth[-1][-1] != "\n": 
+            ground_truth[-1] = "background\n"
         gt_len = len(ground_truth)
 
         difference = gt_len - feat.shape[1]
@@ -33,7 +35,7 @@ def run(input_path, gt_path, check, transpose):
             print('Incorrect feature shape, is the matrix transposed yet? ', feat.shape)
             break
         if gt_len == feat.shape[1]:
-            print(f'Skip smaple {path}, dimensions already equal gt/dim {gt_len}/{feat.shape}')
+            # print(f'Skip smaple {path}, dimensions already equal gt/dim {gt_len}/{feat.shape}')
             continue
         
         print(f'Comparision {path}: gt_len {gt_len}, feat_shape {feat.shape}, diff {difference}') 
@@ -45,16 +47,18 @@ def run(input_path, gt_path, check, transpose):
             print(f"Adjusted ground truth: {len(new_ground_truth)}/{feat.shape}")   
         elif not check and difference < 0:
             print(f"Len difference of {difference} detected, adjusting ground truth: {ground_truth_path}")
-            gt_ptr = open(join(gt_path, os.path.splitext(path)[0] + '.txt'), 'a')
-            gt_pad = ['background'] * (-1 * difference + 1)
-            gt_ptr.write('\n')
-            gt_ptr.write('\n'.join(gt_pad))
+            open(ground_truth_path, 'a').write('\n')
+            gt_ptr = open(ground_truth_path, 'w')
+            ground_truth.extend(['background\n'] * (-1 * difference))
+            new_ground_truth = [line if line != "\n" else 'background\n' for line in ground_truth]  
+            gt_ptr.writelines(new_ground_truth)
             gt_ptr.close()
-        elif (gt_len - 1) == feat.shape[1] and check:
-            print('Len difference of 1 detected, adjusting: ', path)
-            new_ground_truth = ground_truth[:-1]
-            open(ground_truth_path, 'w').writelines(new_ground_truth) 
-            print(f"Adjusted ground truth: {len(new_ground_truth)}/{feat.shape}")
+            print(f"Adjusted ground_truth: {len(new_ground_truth)}/{feat.shape}")
+        #elif (gt_len - 1) == feat.shape[1] and check:
+        #    print('Len difference of 1 detected, adjusting: ', path)
+        #    new_ground_truth = ground_truth[:-1]
+        #    open(ground_truth_path, 'w').writelines(new_ground_truth) 
+        #    print(f"Adjusted ground truth: {len(new_ground_truth)}/{feat.shape}")
 
 
 if __name__ == "__main__": 
